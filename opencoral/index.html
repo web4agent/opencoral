@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCoral | 2D Spatial Social Map</title>
+    <!-- Decentralized Dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@irys/sdk@0.2.11/bundle.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&family=JetBrains+Mono:wght@400;700&family=Staatliches&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #020408;
+            --accent-glow: rgba(0, 255, 204, 0.15);
+            --text-main: #e0e0e0;
+        }
+
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            background: var(--bg-color);
+            color: var(--text-main);
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+        }
+
+        #root {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        .boot-screen {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+            z-index: 9999;
+        }
+
+        .coral-logo {
+            font-family: 'Staatliches', cursive;
+            font-size: 4rem;
+            color: #00FFCC;
+            letter-spacing: 0.5rem;
+            text-shadow: 0 0 20px rgba(0, 255, 204, 0.5);
+            margin-bottom: 2rem;
+            opacity: 0;
+        }
+
+        .loading-bar-wrap {
+            width: 300px;
+            height: 2px;
+            background: rgba(255, 255, 255, 0.1);
+            position: relative;
+        }
+
+        .loading-bar {
+            position: absolute;
+            left: 0;
+            top: 0;
+            height: 100%;
+            width: 0%;
+            background: #00FFCC;
+            box-shadow: 0 0 10px #00FFCC;
+        }
+
+        .status-text {
+            margin-top: 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="boot-screen">
+        <div class="coral-logo">OPENCORAL</div>
+        <div class="loading-bar-wrap">
+            <div class="loading-bar"></div>
+        </div>
+        <div class="status-text" id="status-msg">Initializing W4AP_PROTOCOL...</div>
+    </div>
+
+    <div id="root"></div>
+
+    <script>
+        const CONFIG = {
+            gateway: 'https://uploader.irys.xyz',
+            appName: 'W4AP',
+            layoutType: 'opencoral_layout',
+            version: '2.2.19',
+            publisher: '0x686d02c17aa2018a883d2482eda798780aedb7f8',
+            localDebug: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        };
+
+        // Mapping for local files
+        const LOCAL_MAP = {
+            'opencoral_layout': '00_layout.json',
+            'wallet_widget': '01_wallet.json',
+            'map_engine': '10_map_engine.json',
+            'post_bar': '40_post_bar.json',
+            'bubble_controller': '20_bubble.json'
+        };
+
+        // Protocol Primitive: SUMMON
+        window.SUMMON = async function (targetId, type, version = CONFIG.version) {
+            console.log(`[SUMMON] Resolving ${type} v${version}...`);
+
+            if (CONFIG.localDebug && LOCAL_MAP[type]) {
+                try {
+                    console.log(`[SUMMON] Local Debug Mode: Fetching ${LOCAL_MAP[type]}`);
+                    const res = await fetch(LOCAL_MAP[type]);
+                    if (!res.ok) throw new Error("Local file not found");
+                    const json = await res.json();
+                    return await applyWidget(targetId, json);
+                } catch (e) {
+                    console.warn(`[SUMMON] Local fetch failed for ${type}, falling back to GQL...`, e);
+                }
+            }
+
+            const query = `query {
+                transactions(
+                    tags: [
+                        { name: "${CONFIG.appName}", values: ["${type}"] },
+                        { name: "Version", values: ["${version}"] }
+                    ],
+                    owners: ["${CONFIG.publisher}"],
+                    first: 1,
+                    order: DESC
+                ) {
+                    edges { node { id } }
+                }
+            }`;
+
+            try {
+                const response = await fetch(`${CONFIG.gateway}/graphql`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+
+                const result = await response.json();
+                if (!result.data?.transactions?.edges?.length) {
+                    throw new Error(`Component ${type} not found on Irys.`);
+                }
+
+                const widgetId = result.data.transactions.edges[0].node.id;
+                const widgetRes = await fetch(`${CONFIG.gateway}/${widgetId}`);
+                const json = await widgetRes.json();
+
+                return await applyWidget(targetId, json);
+            } catch (err) {
+                console.error(`[SUMMON_FAIL] ${type}:`, err);
+            }
+        };
+
+        async function applyWidget(targetId, json) {
+            const widget = json.widget || json;
+            const container = document.getElementById(targetId);
+            if (!container) throw new Error(`Mount target #${targetId} missing.`);
+
+            if (widget.html) container.innerHTML = widget.html;
+
+            if (widget.css) {
+                const style = document.createElement('style');
+                style.textContent = widget.css;
+                document.head.appendChild(style);
+            }
+
+            if (widget.js) {
+                const script = document.createElement('script');
+                script.textContent = `(function(){ ${widget.js} })();`;
+                document.body.appendChild(script);
+            }
+            return true;
+        }
+
+        async function boot() {
+            const statusMsg = document.getElementById('status-msg');
+            const loadingBar = document.querySelector('.loading-bar');
+
+            gsap.to('.coral-logo', { opacity: 1, duration: 1.5, ease: "power2.inOut" });
+            gsap.to(loadingBar, { width: "30%", duration: 1 });
+
+            try {
+                if (CONFIG.localDebug) {
+                    statusMsg.innerText = "Local Debug Mode: Summoning Layout...";
+                    gsap.to(loadingBar, { width: "70%", duration: 1 });
+                    const success = await window.SUMMON('root', CONFIG.layoutType);
+                    if (success) {
+                        gsap.to(loadingBar, {
+                            width: "100%", duration: 0.5, onComplete: () => {
+                                gsap.to('.boot-screen', { opacity: 0, pointerEvents: 'none', duration: 1, delay: 0.5 });
+                            }
+                        });
+                        return;
+                    }
+                }
+
+                statusMsg.innerText = "Discovering Spatial Layout...";
+                const query = `query {
+                    transactions(
+                        tags: [
+                            { name: "${CONFIG.appName}", values: ["${CONFIG.layoutType}"] },
+                            { name: "Version", values: ["${CONFIG.version}"] }
+                        ],
+                        owners: ["${CONFIG.publisher}"],
+                        first: 1,
+                        order: DESC
+                    ) {
+                        edges { node { id } }
+                    }
+                }`;
+
+                const response = await fetch(`${CONFIG.gateway}/graphql`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+
+                const result = await response.json();
+                if (result.data?.transactions?.edges?.length) {
+                    const layoutId = result.data.transactions.edges[0].node.id;
+                    statusMsg.innerText = "Layout Resolved: " + layoutId.slice(0, 8);
+
+                    gsap.to(loadingBar, { width: "70%", duration: 1 });
+
+                    await window.SUMMON('root', CONFIG.layoutType);
+                } else {
+                    statusMsg.innerText = "No Layout Published.";
+                }
+
+                gsap.to(loadingBar, {
+                    width: "100%", duration: 0.5, onComplete: () => {
+                        gsap.to('.boot-screen', { opacity: 0, pointerEvents: 'none', duration: 1, delay: 0.5 });
+                    }
+                });
+
+            } catch (err) {
+                console.error("Boot failure:", err);
+                statusMsg.style.color = "#ff4d4d";
+                statusMsg.innerText = "CRITICAL_ERROR: " + err.message;
+            }
+        }
+
+        window.onload = boot;
+    </script>
+</body>
+
+</html>

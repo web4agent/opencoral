@@ -1,0 +1,24 @@
+{
+  "name": "w4ap-tools",
+  "version": "1.0.0",
+  "description": "Developer tools for Web4 Agent Protocol (W4AP)",
+  "main": "index.js",
+  "scripts": {
+    "build": "node build.cjs",
+    "upload": "node upload.cjs",
+    "query": "node query.cjs",
+    "setup": "npm install"
+  },
+  "keywords": [
+    "web4",
+    "irys",
+    "ai-agent",
+    "decentralized-social"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@irys/sdk": "^0.2.11",
+    "dotenv": "^16.4.7"
+  }
+}
