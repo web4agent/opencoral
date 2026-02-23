@@ -97,7 +97,7 @@ const walletCss = `
 
 const walletJs = `
 (function() {
-    console.log("💳 OpenCoral Wallet Component Init v2.2.4.");
+    console.log("💳 OpenCoral Wallet Component Init v2.3.0. Mod: Solana (WebIrys compat)");
 
     const pill = document.getElementById('wallet-status');
     const dot = pill.querySelector('.status-dot');
@@ -105,28 +105,68 @@ const walletJs = `
     const menu = document.getElementById('wallet-dropdown');
     
     let currentAddress = null;
+    let irysUploaderObj = null;
 
     async function checkWallet() {
-        if (window.ethereum) {
+        if (window.solana && window.solana.isPhantom) {
             try {
-                const accounts = await window.ethereum.request({ method: 'eth_accounts' });
-                if (accounts.length > 0) {
-                    onConnected(accounts[0]);
+                const resp = await window.solana.connect({ onlyIfTrusted: true });
+                if (resp && resp.publicKey) {
+                    await onConnected(resp.publicKey.toString());
                 } else {
                     onDisconnected();
                 }
             } catch (err) {
-                console.error("Wallet check fail:", err);
+                // User hasn't authorized before
+                onDisconnected();
             }
         } else {
-            addressSpan.innerText = "NO WALLET";
+            addressSpan.innerText = "NO PHANTOM";
+            onDisconnected();
         }
     }
 
-    function onConnected(addr) {
+    async function initIrys() {
+        if (!window.WebIrys) throw new Error("WebIrys SDK not loaded");
+        
+        // Patch signMessage for Phantom compatibility
+        const originalSignMessage = window.solana.signMessage;
+        window.solana.signMessage = async (msg) => {
+            const signedMessage = await originalSignMessage.call(window.solana, msg);
+            return signedMessage.signature || signedMessage;
+        };
+
+        // Patch sendTransaction for Irys fund() compatibility
+        if (!window.solana.sendTransaction && window.solana.signAndSendTransaction) {
+            window.solana.sendTransaction = async (transaction) => {
+                const signed = await window.solana.signAndSendTransaction(transaction);
+                return signed.signature;
+            };
+        }
+
+        const webUploader = window.WebIrys.WebUploader || window.WebUploader;
+        const webSolana = window.WebIrys.WebSolana || window.WebSolana;
+
+        if (webUploader && webSolana) {
+             const rpcUrl = 'https://mainnet.helius-rpc.com/?api-key=e4424c51-3087-470d-8399-b38c1eacc90f';
+             irysUploaderObj = await webUploader(webSolana).withProvider(window.solana).withRpc(rpcUrl);
+             window.irysUploader = irysUploaderObj;
+        } else {
+             throw new Error("IRYS_SOL_FACTORY_NOT_FOUND");
+        }
+    }
+
+    async function onConnected(addr) {
         currentAddress = addr;
+        addressSpan.innerText = "IRYS_INIT...";
+        try {
+            await initIrys();
+        } catch(e) {
+            console.error("Irys init failed:", e);
+        }
+
         dot.classList.add('connected');
-        addressSpan.innerText = addr.slice(0, 6) + "..." + addr.slice(-4);
+        addressSpan.innerText = addr.slice(0, 4) + "..." + addr.slice(-4);
         window.WALLET_ADDRESS = addr; // Global for other components
         
         // Dispatch event for other components
@@ -135,19 +175,32 @@ const walletJs = `
 
     function onDisconnected() {
         currentAddress = null;
+        irysUploaderObj = null;
+        window.irysUploader = null;
+        
         dot.classList.remove('connected');
-        addressSpan.innerText = "CONNECT WALLET";
+        if (!window.solana || !window.solana.isPhantom) {
+            addressSpan.innerText = "NO PHANTOM";
+        } else {
+            addressSpan.innerText = "CONNECT WALLET";
+        }
         window.WALLET_ADDRESS = null;
         window.dispatchEvent(new CustomEvent('w4ap:walletDisconnected'));
     }
 
     pill.addEventListener('click', async () => {
         if (!currentAddress) {
+            if (!window.solana || !window.solana.isPhantom) {
+                window.open("https://phantom.app/", "_blank");
+                return;
+            }
             try {
-                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-                onConnected(accounts[0]);
+                addressSpan.innerText = "CONNECTING...";
+                const resp = await window.solana.connect();
+                await onConnected(resp.publicKey.toString());
             } catch (err) {
                 console.error("Connect fail:", err);
+                addressSpan.innerText = "CONNECT WALLET";
             }
         } else {
             menu.classList.toggle('hidden');
@@ -162,46 +215,63 @@ const walletJs = `
     });
 
     document.getElementById('btn-disconnect').addEventListener('click', () => {
+        if (window.solana && window.solana.disconnect) {
+            window.solana.disconnect();
+        }
         onDisconnected();
         menu.classList.add('hidden');
     });
 
     // Handle account changes
-    if (window.ethereum) {
-        window.ethereum.on('accountsChanged', (accounts) => {
-            if (accounts.length > 0) onConnected(accounts[0]);
+    if (window.solana) {
+        window.solana.on('accountChanged', async (publicKey) => {
+            if (publicKey) {
+                window.dispatchEvent(new CustomEvent('w4ap:walletDisconnected'));
+                await onConnected(publicKey.toString());
+            }
             else onDisconnected();
+        });
+        window.solana.on('disconnect', () => {
+            onDisconnected();
         });
     }
 
     window.GET_IRYS = async function() {
-        if (!window.ethereum) throw new Error("No Ethereum provider found");
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        const irys = new Irys.WebIrys({
-            url: "https://uploader.irys.xyz",
-            token: "bnb",
-            wallet: { provider }
-        });
-        await irys.ready();
-        return irys;
+        if (!irysUploaderObj) throw new Error("Irys not initialized. Connect wallet first.");
+        return irysUploaderObj;
     };
 
-    // Export signTransaction for Post Bar
-    window.SIGN_W4AP = async function(message) {
-        if (!currentAddress) throw new Error("Wallet not connected");
-        return await window.ethereum.request({
-            method: 'personal_sign',
-            params: [message, currentAddress]
-        });
+    // Export signTransaction for Post Bar to derive Whisper Key
+    window.SIGN_W4AP = async function(messageBuffer) {
+        if (!currentAddress || !window.solana) throw new Error("Wallet not connected");
+        return await window.solana.signMessage(messageBuffer, 'utf8');
     };
 
-    checkWallet();
+    async function loadDependencies() {
+        const scripts = [
+            "https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js",
+            "https://uploader.irys.xyz/Cip4wmuMv1K3bmcL4vYoZuV2aQQnnzViqwHm6PCei3QX/bundle.js"
+        ];
+
+        for (const src of scripts) {
+            await new Promise((resolve) => {
+                if (src.includes('ethers') && window.ethers) return resolve();
+                if (src.includes('bundle.js') && window.WebIrys) return resolve();
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = resolve;
+                document.head.appendChild(script);
+            });
+        }
+    }
+
+    loadDependencies().then(() => checkWallet());
 })();
 `;
 
 module.exports = {
     widget: {
-        metadata: { name: 'OpenCoral Wallet', version: '2.2.4' },
+        metadata: { name: 'OpenCoral Wallet', version: '2.3.0' },
         html: walletHtml,
         css: walletCss,
         js: walletJs

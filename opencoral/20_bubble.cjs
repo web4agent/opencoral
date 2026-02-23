@@ -29,6 +29,68 @@ const bubbleCss = `
     border: 1px solid rgba(255, 64, 129, 0.5);
 }
 
+.w4-bubble.expanded {
+    z-index: 9999;
+    max-width: 450px;
+    width: auto;
+    cursor: default;
+    background: #FFFFFF;
+    border: 2px solid #FF4081;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2), 0 0 30px rgba(255, 64, 129, 0.1);
+}
+
+.w4-bubble.expanded .bubble-content {
+    max-height: 300px;
+    overflow-y: auto;
+    padding-right: 5px;
+    font-size: 1.05rem;
+}
+
+.bubble-footer {
+    display: none;
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(0, 0, 0, 0.1);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+}
+
+.w4-bubble.expanded .bubble-footer {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.json-link {
+    color: #999999;
+    text-decoration: none;
+    font-size: 0.65rem;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: color 0.2s;
+}
+
+.json-link:hover {
+    color: #666666;
+    text-decoration: underline;
+}
+
+.close-hint {
+    display: none;
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    color: #999;
+    font-size: 1.2rem;
+    font-weight: bold;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.w4-bubble.expanded .close-hint {
+    display: block;
+}
+
 .w4-bubble::after {
     content: '';
     position: absolute;
@@ -71,17 +133,18 @@ const bubbleCss = `
 
 const bubbleJs = `
 (function() {
-    const VERSION = "2.2.19";
-    console.log("💬 OpenCoral Bubble Engine v" + VERSION + " Online [Signal Restoration & Gravity].");
+    const VERSION = "2.3.0";
+    console.log("💬 OpenCoral Bubble Engine v" + VERSION + " Online [Auto-Load Timeline & Genesis].");
 
     if (window.CORAL_BUBBLE_INTERVAL) clearInterval(window.CORAL_BUBBLE_INTERVAL);
 
     const gateway = window.BOOT_GATEWAY || 'https://uploader.irys.xyz';
     const GQL_ENDPOINT = "https://uploader.irys.xyz/graphql";
+    const GENESIS_POST_ID = "2dPqpMfQhbdNvxtqiYWDefG2vocXsy53aSNzUZXxknE3";
     
     let activeSignals = [];
     let signalData = []; // [{ id, x, y, tags, el }]
-    let currentOffset = 0;
+    let currentOffset = 0; // Default to NOW with auto-fallback
     let currentZoom = 1.0;
     
     let currentMapX = 0;
@@ -181,6 +244,12 @@ const bubbleJs = `
         const from = targetMs - windowMs;
         const to = targetMs;
         
+        // 1. If at offset 0 (NOW), do not apply a rigid timestamp bounding box.
+        // Instead, just fetch the most recent N posts.
+        const timeFilterStr = currentOffset === 0 ? '' : \`timestamp: { from: \${from}, to: \${to} },\`;
+        const spatialLimit = currentOffset === 0 ? 25 : 100;
+        const legacyLimit = currentOffset === 0 ? 25 : 50;
+        
         if (currentOffset !== 0) {
             if (window.W4AP_CACHE && window.W4AP_CACHE.length > 0) {
                 const cachedEdges = window.W4AP_CACHE.filter(edge => {
@@ -210,8 +279,8 @@ const bubbleJs = `
                     { name: "Object-Type", values: ["post"] },
                     { name: "\${tagName}", values: \${JSON.stringify(neighbors)} }
                 ],
-                \${currentOffset === 0 ? '' : \`timestamp: { from: \${from}, to: \${to} },\`}
-                first: 100, 
+                \${timeFilterStr}
+                first: \${spatialLimit}, 
                 order: DESC
             ) { edges { node { id address timestamp tags { name value } } } } 
         \`;
@@ -223,8 +292,8 @@ const bubbleJs = `
                         { name: "App-Name", values: ["Web4SNS"] },
                         { name: "Object-Type", values: ["post"] }
                     ],
-                    \${currentOffset === 0 ? '' : \`timestamp: { from: \${from}, to: \${to} },\`}
-                    first: 50, 
+                    \${timeFilterStr}
+                    first: \${legacyLimit}, 
                     order: DESC
                 ) { edges { node { id address timestamp tags { name value } } } } 
             \`;
@@ -248,6 +317,22 @@ const bubbleJs = `
             if (result?.data?.legacy?.edges) {
                 const legacyOnly = result.data.legacy.edges.filter(edge => !edge.node.tags.some(t => t.name === 'Cell-R1'));
                 allEdges = allEdges.concat(legacyOnly);
+            }
+            
+            // v2.2.30: Inject Genesis Post on Origin (NOW mode only)
+            if (currentOffset === 0) {
+                allEdges.push({
+                    node: {
+                        id: GENESIS_POST_ID,
+                        address: "A5Hzm1b3mtQfYfU6q5qvKeVJmoaReCvthwfHuZkBBdAQ",
+                        timestamp: 1741851186098, // The true timestamp of this genesis post
+                        tags: [
+                            { name: "Object-Type", value: "post" },
+                            { name: "Spatial-X", value: "0" },
+                            { name: "Spatial-Y", value: "0" }
+                        ]
+                    }
+                });
             }
             
             const uniqueEdges = [];
@@ -342,21 +427,52 @@ const bubbleJs = `
                 
                 updateBubbleTransform(bubble, x, y);
                 
-                const ageInWindow = (targetMs - tsMs) / windowMs;
-                bubble.style.opacity = Math.max(0.1, 1 - (ageInWindow * 0.9)); 
+                // Removed dynamic age-based opacity fading per user request
+                // bubble.style.opacity = currentOffset === 0 ? 1.0 : Math.max(0.1, 1 - (ageInWindow * 0.9)); 
+                bubble.style.opacity = 1.0;
 
                 bubble.dataset.worldX = x / 1000;
                 bubble.dataset.worldY = y / 1000;
                 bubble.dataset.timestamp = tsMs;
 
                 const shortAddr = (node.address || "0x???").slice(0, 6);
-                bubble.innerHTML = \`
-                    <div class="bubble-author">
-                        <div class="author-avatar" style="background: \${'#'+node.id.slice(-6)}"></div>
-                        <span class="author-name">\${shortAddr}</span>
-                    </div>
-                    <div class="bubble-content">正在解密信号...</div>
-                \`;
+                const d = new Date(tsMs);
+                const yyyymmdd = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+                const hhmm = String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+                const dateStr = yyyymmdd + ' ' + hhmm;
+
+                bubble.innerHTML = 
+                    '<div class="close-hint">×</div>' +
+                    '<div class="bubble-author">' +
+                        '<div class="author-avatar" style="background: ' + ('#'+node.id.slice(-6)) + '"></div>' +
+                        '<span class="author-name">' + shortAddr + '</span>' +
+                        '<span class="bubble-date" style="margin-left:auto; font-size:0.65rem; color:#999; font-family:JetBrains Mono, monospace; white-space:nowrap; flex-shrink:0;">' + dateStr + '</span>' +
+                    '</div>' +
+                    '<div class="bubble-title" style="font-weight:800; font-size:1.05rem; margin-bottom:6px; display:none; color:#00838F;"></div>' +
+                    '<div class="bubble-content">正在解密信号...</div>' +
+                    '<div class="bubble-footer">' +
+                        '<a href="https://uploader.irys.xyz/tx/' + node.id + '" target="_blank" class="json-link">' +
+                             'View Transaction ↗' +
+                        '</a>' +
+                    '</div>';
+                bubble.addEventListener('click', (e) => {
+                    const isLink = e.target.closest('.json-link');
+                    if (isLink) return;
+
+                    const wasExpanded = bubble.classList.contains('expanded');
+                    
+                    // Collapse all others
+                    document.querySelectorAll('.w4-bubble.expanded').forEach(other => {
+                        if (other !== bubble) collapseBubble(other);
+                    });
+
+                    if (!wasExpanded) {
+                        expandBubble(bubble);
+                    } else {
+                        collapseBubble(bubble);
+                    }
+                    e.stopPropagation();
+                });
 
                 layer.appendChild(bubble);
                 activeSignals.push(node.id);
@@ -383,12 +499,45 @@ const bubbleJs = `
     }
 
     function updateBubbleTransform(bubble, wx, wy) {
+        if (bubble.classList.contains('expanded')) {
+            bubble.style.left = wx + 'px';
+            bubble.style.top = (-wy) + 'px';
+            bubble.style.transform = 'translate(-50%, -100%) scale(1)'; // Fixed scale when expanded
+            return;
+        }
         const visualScale = 1 / currentZoom;
         const adaptiveScale = Math.min(1.5, Math.max(0.5, visualScale));
         bubble.style.left = wx + 'px';
         bubble.style.top = (-wy) + 'px'; // Invert Y axis visually (Up is positive Y)
-        bubble.style.transform = \`translate(-50%, -100%) scale(\${adaptiveScale})\`;
+        bubble.style.transform = 'translate(-50%, -100%) scale(' + adaptiveScale + ')';
     }
+
+    function expandBubble(el) {
+        el.classList.add('expanded');
+        const content = el.dataset.fullContent || "";
+        const cBody = el.querySelector('.bubble-content');
+        if (cBody) cBody.innerText = content;
+        
+        // Pan map to center this bubble if possible
+        const wx = parseFloat(el.dataset.worldX);
+        const wy = parseFloat(el.dataset.worldY);
+        // Dispatch event for map_engine to center? Or just let it be.
+    }
+
+    function collapseBubble(el) {
+        el.classList.remove('expanded');
+        const content = el.dataset.fullContent || "";
+        const cBody = el.querySelector('.bubble-content');
+        if (cBody) {
+             cBody.innerText = content.slice(0, 100) + (content.length > 100 ? '...' : '');
+        }
+    }
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.w4-bubble')) {
+            document.querySelectorAll('.w4-bubble.expanded').forEach(collapseBubble);
+        }
+    });
 
     // Semantic Gravity Loop
     function applyGravity() {
@@ -454,11 +603,27 @@ const bubbleJs = `
             const url = isManifest ? gateway + '/' + id + '/post.json' : gateway + '/' + id;
             const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
             const data = await res.json();
+            const title = data.title;
             const content = data.content?.body || data.summary || data.content || data.body || "SIGNAL_EMPTY";
             const bubble = document.getElementById('bubble-' + id);
             if (bubble) {
+                bubble.dataset.fullContent = content; // Store for expansion
+                if (title) {
+                    bubble.dataset.fullTitle = title;
+                    const titleEl = bubble.querySelector('.bubble-title');
+                    if (titleEl) {
+                        titleEl.innerText = title;
+                        titleEl.style.display = 'block';
+                    }
+                }
                 const el = bubble.querySelector('.bubble-content');
-                if (el) el.innerText = content.slice(0, 100) + (content.length > 100 ? '...' : '');
+                if (el) {
+                    if (bubble.classList.contains('expanded')) {
+                        el.innerText = content;
+                    } else {
+                        el.innerText = content.slice(0, 100) + (content.length > 100 ? '...' : '');
+                    }
+                }
             }
         } catch (e) {
             const bubble = document.getElementById('bubble-' + id);
@@ -519,7 +684,7 @@ const bubbleJs = `
 
 module.exports = {
     widget: {
-        metadata: { name: 'OpenCoral Bubble Controller', version: '2.2.19' },
+        metadata: { name: 'OpenCoral Bubble Controller', version: '2.2.30' },
         html: bubbleHtml,
         css: bubbleCss,
         js: bubbleJs

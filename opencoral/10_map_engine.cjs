@@ -23,7 +23,11 @@ const mapHtml = `
         </button>
 
         <div class="timeline-container">
-            <input type="range" id="timeline-slider" min="0" max="10080" value="0" step="1">
+            <div class="slider-wrapper">
+                <button id="time-prev" class="time-nudge-btn" title="Nudge back 5 mins (Towards NOW)">◀</button>
+                <input type="range" id="timeline-slider" min="0" max="10080" value="0" step="1">
+                <button id="time-next" class="time-nudge-btn" title="Nudge forward 5 mins (Into History)">▶</button>
+            </div>
             <div class="timeline-labels">
                 <span>NOW</span>
                 <span>-1D</span>
@@ -55,7 +59,7 @@ const mapCss = `
 /* Coordinate HUD */
 .coord-hud {
     position: fixed;
-    top: 20px;
+    top: 80px; /* Moved down to avoid 60px title bar */
     left: 20px;
     z-index: 2000;
     background: rgba(255, 255, 255, 0.7);
@@ -184,14 +188,42 @@ const mapCss = `
 
 .timeline-container {
     flex: 1;
-    max-width: 600px;
+    max-width: 1000px;
     display: flex;
     flex-direction: column;
     align-items: center;
 }
 
-#timeline-slider {
+.slider-wrapper {
+    display: flex;
+    align-items: center;
     width: 100%;
+    gap: 15px;
+}
+
+.time-nudge-btn {
+    background: rgba(255, 64, 129, 0.1);
+    border: 1px solid rgba(255, 64, 129, 0.4);
+    color: #FF4081;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.time-nudge-btn:hover {
+    background: rgba(255, 64, 129, 0.3);
+    box-shadow: 0 0 10px rgba(255, 64, 129, 0.5);
+}
+
+#timeline-slider {
+    flex: 1;
     background: transparent;
     -webkit-appearance: none;
 }
@@ -229,11 +261,49 @@ const mapCss = `
     font-size: 0.6rem;
     font-weight: bold;
 }
+
+@media (max-width: 768px) {
+    .nav-control-container {
+        padding: 0 15px;
+        height: 70px;
+        gap: 10px;
+    }
+    
+    .home-btn {
+        width: 36px;
+        height: 36px;
+    }
+    
+    .home-btn svg {
+        width: 18px;
+        height: 18px;
+    }
+    
+    .time-nudge-btn {
+        width: 24px;
+        height: 24px;
+        font-size: 0.6rem;
+    }
+    
+    .timeline-labels span {
+        font-size: 0.5rem;
+    }
+    
+    .coord-hud {
+        top: 70px;
+        left: 10px;
+        padding: 6px 10px;
+    }
+    
+    .coord-display input {
+        width: 40px;
+    }
+}
 `;
 
-const mapJs = `
+const mapEngineJs = `
 (function() {
-    const VERSION = "2.2.19";
+    const VERSION = "2.3.0";
     console.log("🗺️ OpenCoral Map Engine v" + VERSION + " [Navigational Precision] Online.");
 
     const viewport = document.querySelector('.map-viewport');
@@ -241,6 +311,8 @@ const mapJs = `
     const terrain = document.getElementById('procedural-terrain');
     const bubbleLayer = document.getElementById('bubbles-layer');
     const slider = document.getElementById('timeline-slider');
+    const timePrev = document.getElementById('time-prev');
+    const timeNext = document.getElementById('time-next');
     const indicator = document.getElementById('timeline-indicator');
     const homeBtn = document.getElementById('home-btn');
     const inputX = document.getElementById('input-x');
@@ -404,6 +476,50 @@ const mapJs = `
 
     window.addEventListener('mouseup', () => isDragging = false);
 
+    // --- Touch Support for Mobile ---
+    let initialPinchDistance = null;
+    let initialZoom = 1;
+
+    viewport.addEventListener('touchstart', (e) => {
+        if (e.target.closest('.nav-control-container') || e.target.closest('.coord-hud')) return;
+        if (e.touches.length === 1) {
+            isDragging = true;
+            startX = e.touches[0].clientX - worldX;
+            startY = e.touches[0].clientY - worldY;
+        } else if (e.touches.length === 2) {
+            isDragging = false;
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            initialPinchDistance = Math.sqrt(dx * dx + dy * dy);
+            initialZoom = worldZoom;
+        }
+    }, { passive: false });
+
+    window.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1 && isDragging) {
+            worldX = e.touches[0].clientX - startX;
+            worldY = e.touches[0].clientY - startY;
+            updateMap();
+        } else if (e.touches.length === 2 && initialPinchDistance !== null) {
+            e.preventDefault(); // Prevent native scroll
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            const scale = distance / initialPinchDistance;
+            worldZoom = Math.min(15.0, Math.max(0.05, initialZoom * scale));
+            
+            // To be precise we should zoom into the center of the pinch, but center screen is passable for mvp
+            updateMap();
+            window.dispatchEvent(new CustomEvent('w4ap:zoomChange', { detail: { zoom: worldZoom } }));
+        }
+    }, { passive: false });
+
+    window.addEventListener('touchend', () => {
+        isDragging = false;
+        initialPinchDistance = null;
+    });
+
     viewport.addEventListener('wheel', (e) => {
         e.preventDefault();
         const delta = e.deltaY > 0 ? 0.9 : 1.1;
@@ -489,11 +605,24 @@ const mapJs = `
         return label.trim() + " AGO";
     }
 
-    slider.addEventListener('input', (e) => {
-        const val = parseInt(e.target.value);
+    function updateTimeline(val) {
+        val = Math.max(0, Math.min(10080, parseInt(val)));
+        if (parseInt(slider.value) !== val) {
+            slider.value = val;
+        }
         indicator.innerText = formatTimeLabel(val);
         window.dispatchEvent(new CustomEvent('w4ap:timelineShift', { detail: { offsetMinutes: val } }));
+    }
+
+    slider.addEventListener('input', (e) => {
+        updateTimeline(e.target.value);
     });
+
+    // Slider goes from 0 (Left, NOW) to 10080 (Right, -7D)
+    // Left button (prev) should move thumb left (subtract from value)
+    // Right button (next) should move thumb right (add to value)
+    if (timePrev) timePrev.addEventListener('click', () => updateTimeline(parseInt(slider.value) - 5));
+    if (timeNext) timeNext.addEventListener('click', () => updateTimeline(parseInt(slider.value) + 5));
 
     window.addEventListener('resize', updateMap);
     updateMap();
@@ -502,9 +631,13 @@ const mapJs = `
 
 module.exports = {
     widget: {
-        metadata: { name: 'OpenCoral Map Engine', version: '2.2.19' },
+        metadata: {
+            name: 'OpenCoral Map Engine',
+            version: '2.3.0',
+            author: 'Antigravity'
+        },
         html: mapHtml,
         css: mapCss,
-        js: mapJs
+        js: mapEngineJs
     }
 };

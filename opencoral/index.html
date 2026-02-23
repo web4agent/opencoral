@@ -104,7 +104,7 @@
             gateway: 'https://uploader.irys.xyz',
             appName: 'W4AP',
             layoutType: 'opencoral_layout',
-            version: '2.2.19',
+            version: '2.3.0',
             publisher: '0x686d02c17aa2018a883d2482eda798780aedb7f8',
             localDebug: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
         };
@@ -113,6 +113,7 @@
         const LOCAL_MAP = {
             'opencoral_layout': '00_layout.json',
             'wallet_widget': '01_wallet.json',
+            'title_bar': '02_title.json',
             'map_engine': '10_map_engine.json',
             'post_bar': '40_post_bar.json',
             'bubble_controller': '20_bubble.json'
@@ -241,7 +242,10 @@
 
                     gsap.to(loadingBar, { width: "70%", duration: 1 });
 
-                    await window.SUMMON('root', CONFIG.layoutType);
+                    // Fetch the actual layout code from Irys and apply it
+                    const layoutRes = await fetch(`${CONFIG.gateway}/${layoutId}`);
+                    const layoutJson = await layoutRes.json();
+                    await applyWidget('root', layoutJson);
                 } else {
                     statusMsg.innerText = "No Layout Published.";
                 }

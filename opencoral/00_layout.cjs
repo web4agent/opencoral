@@ -1,7 +1,7 @@
 const layoutHtml = `
 <div class="coral-viewport">
     <div id="spatial-canvas-mount"></div>
-    <div id="wallet-mount" class="ui-layer top-right"></div>
+    <div id="title-mount" class="ui-layer top-full-width"></div>
     <main id="spatial-root"></main>
     <div id="timeline-mount" class="ui-layer bottom-center"></div>
     <div id="post-bar-mount" class="ui-layer bottom-center-float"></div>
@@ -42,9 +42,10 @@ const layoutCss = `
     pointer-events: auto;
 }
 
-.top-right {
-    top: 20px;
-    right: 20px;
+.top-full-width {
+    top: 0;
+    left: 0;
+    width: 100%;
 }
 
 .bottom-center {
@@ -55,11 +56,18 @@ const layoutCss = `
 }
 
 .bottom-center-float {
-    bottom: 60px;
+    bottom: 120px;
     left: 50%;
     transform: translateX(-50%);
-    width: 100%;
+    width: 90%;
     max-width: 600px;
+}
+
+@media (max-width: 768px) {
+    .bottom-center-float {
+        bottom: 80px;
+        width: calc(100% - 20px);
+    }
 }
 
 .pointer-none {
@@ -69,13 +77,21 @@ const layoutCss = `
 
 const layoutJs = `
 (function() {
-    console.log("🔱 OpenCoral Layout v2.2.19 Online [Vibrant Aesthetic].");
+    const VERSION = "2.3.0";
+    console.log("🔱 OpenCoral Layout Manager v" + VERSION + " Init...");
 
     async function initializeEcosystem() {
         if (!window.SUMMON) {
             console.error("Critical: SUMMON primitive missing from boot loader.");
             return;
         }
+
+        console.log("[Layout] Triggering Nav/Wallet Ritual...");
+        // 1. Summon title bar first (it contains the wallet mount)
+        await window.SUMMON('title-mount', 'title_bar');
+        
+        // 2. Summon wallet directly into the title bar's slot
+        await window.SUMMON('wallet-mount', 'wallet_widget');
 
         await Promise.all([
             window.SUMMON('spatial-root', 'map_engine'),
@@ -85,20 +101,17 @@ const layoutJs = `
         console.log("[Layout] Triggering Archipelago Bubble Ritual...");
         await window.SUMMON('bubbles-layer', 'bubble_controller');
         
+        // Finalize Boot Sequence
         console.log("🔱 OpenCoral Ecosystem Fully Materialized.");
     }
-
+    
     initializeEcosystem();
 })();
 `;
 
 module.exports = {
     widget: {
-        metadata: {
-            name: 'OpenCoral Spatial Layout',
-            version: '2.2.19',
-            author: 'Antigravity'
-        },
+        metadata: { name: 'OpenCoral Native Layout', version: '2.3.0' },
         html: layoutHtml,
         css: layoutCss,
         js: layoutJs
